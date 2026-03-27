@@ -41,6 +41,10 @@ private:
     void createImageViews(); // Tells Vulkan how to interpret the Swap Chain images
     void mainLoop();      // Runs every frame (Update & Render)
     void cleanup();       // Shuts down everything in reverse order
+    void createGraphicsPipeline(); // The "Factory" for drawing
+    VkRenderPass m_RenderPass;     // Tells Vulkan what 'attachments' (colors/depth) we use
+    VkPipelineLayout m_PipelineLayout; // Used for passing 'Uniforms' (like flashlight position)
+    VkPipeline m_GraphicsPipeline; // The actual "Frozen" state of the GPU
 
     // --- HELPER FUNCTIONS ---
     // These help us pick the best hardware for "Hatchet"
