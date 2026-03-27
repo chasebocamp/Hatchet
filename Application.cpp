@@ -1,34 +1,26 @@
 #include "Application.hpp"
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 
-// 1. The Constructor: This runs first.
-// We initialize our variables here using a "Member Initializer List" (the : part).
+// 1. The Constructor
 Application::Application() 
     : m_Window(nullptr), m_Instance(VK_NULL_HANDLE) {
-    // We leave this empty for now because we call our init functions in Run()
 }
 
-// 2. The Destructor: This runs last.
-// This is "Manual Memory Management." C++ won't clean up Vulkan for you; 
-// you must do it yourself or the GPU memory will stay "leaked."
+// 2. The Destructor
 Application::~Application() {
     cleanup();
 }
 
 void Application::initWindow() {
-    // Initialize the GLFW library
     if (!glfwInit()) {
         throw std::runtime_error("Failed to initialize GLFW");
     }
 
-    // Tell GLFW NOT to create an OpenGL context (since we are using Vulkan)
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    
-    // Disable resizing for now to keep the "Stability" high
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
-    // Create the actual window
     m_Window = glfwCreateWindow(m_Width, m_Height, m_WindowTitle.c_str(), nullptr, nullptr);
 
     if (!m_Window) {
@@ -37,38 +29,42 @@ void Application::initWindow() {
 }
 
 void Application::initVulkan() {
-    // This is where we will eventually talk to the GPU.
-    // For now, we'll just print a message to show the engine is starting.
-    std::cout << "Initializing Vulkan for Hatchet..." << std::endl;
-}
+    // --- STEP A: Create the Instance ---
+    VkApplicationInfo appInfo{};
+    appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+    appInfo.pApplicationName = "Hatchet";
+    appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
+    appInfo.pEngineName = "HatchetEngine";
+    appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
+    appInfo.apiVersion = VK_API_VERSION_1_1;
 
-void Application::mainLoop() {
-    // This loop runs until the user clicks the 'X' on the window.
-    while (!glfwWindowShouldClose(m_Window)) {
-        // Check for "Events" (like mouse clicks or keyboard presses)
-        glfwPollEvents();
-        
-        // This is where the "Dread" happens! 
-        // We will put our ECS Update and Rendering code here later.
+    VkInstanceCreateInfo createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    createInfo.pApplicationInfo = &appInfo;
+
+    uint32_t glfwExtensionCount = 0;
+    const char** glfwExtensions;
+    glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
+
+    createInfo.enabledExtensionCount = glfwExtensionCount;
+    createInfo.ppEnabledExtensionNames = glfwExtensions;
+    createInfo.enabledLayerCount = 0;
+
+    if (vkCreateInstance(&createInfo, nullptr, &m_Instance) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create Vulkan instance!");
     }
-}
 
-void Application::cleanup() {
-    // Destroy the window
-    if (m_Window) {
-        glfwDestroyWindow(m_Window);
+    std::cout << "Vulkan Instance created." << std::endl;
+
+    // --- STEP B: Pick a Physical Device (GPU) ---
+    uint32_t deviceCount = 0;
+    // Ask Vulkan how many GPUs are in this computer
+    vkEnumeratePhysicalDevices(m_Instance, &deviceCount, nullptr);
+
+    if (deviceCount == 0) {
+        throw std::runtime_error("Failed to find GPUs with Vulkan support!");
     }
 
-    // Terminate GLFW
-    glfwTerminate();
-    
-    std::cout << "Engine shut down safely." << std::endl;
-}
-
-void Application::Run() {
-    // The sequence of life for the engine:
-    initWindow();
-    initVulkan();
-    mainLoop();
-    // Cleanup happens automatically via the Destructor when Run() finishes
-}
+    // Store all found GPUs in a C++ Vector (Dynamic Array)
+    std::vector<VkPhysicalDevice> devices(deviceCount);
+    vkEnumeratePhysicalDevices(m_Instance,
