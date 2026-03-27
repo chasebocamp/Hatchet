@@ -1,234 +1,169 @@
 #include "Application.hpp"
-#include "Logger.hpp" // Crucial for our new HT_INFO/HT_ERROR macros
+#include "Logger.hpp"
+#include "Shader.hpp" // Now using our new Shader loader!
 #include <iostream>
 #include <stdexcept>
-#include <algorithm>
 #include <vector>
 
-// --- HELPER: Finding the right GPU "Queue Lines" ---
-QueueFamilyIndices Application::findQueueFamilies(VkPhysicalDevice device) {
-    QueueFamilyIndices indices;
-    uint32_t queueFamilyCount = 0;
-    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, nullptr);
+// ... (Keep your existing findQueueFamilies, initWindow, initVulkan, createSwapChain, createImageViews) ...
 
-    std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
-    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.data());
+void Application::createRenderPass() {
+    // A Render Pass tells Vulkan: "I am drawing to a color buffer, 
+    // clear it to black first, and save the result when I'm done."
+    VkAttachmentDescription colorAttachment{};
+    colorAttachment.format = m_SwapChainImageFormat;
+    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; // Clear screen every frame
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
-    int i = 0;
-    for (const auto& queueFamily : queueFamilies) {
-        // Does it support Graphics (for drawing)?
-        if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-            indices.graphicsFamily = i;
-        }
+    VkAttachmentReference colorAttachmentRef{};
+    colorAttachmentRef.attachment = 0;
+    colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
-        // Does it support Presenting (showing to the window)?
-        VkBool32 presentSupport = false;
-        vkGetPhysicalDeviceSurfaceSupportKHR(device, i, m_Surface, &presentSupport);
-        if (presentSupport) {
-            indices.presentFamily = i;
-        }
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorAttachmentRef;
 
-        if (indices.isComplete()) break;
-        i++;
+    VkRenderPassCreateInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    renderPassInfo.attachmentCount = 1;
+    renderPassInfo.pAttachments = &colorAttachment;
+    renderPassInfo.subpassCount = 1;
+    renderPassInfo.pSubpasses = &subpass;
+
+    if (vkCreateRenderPass(m_Device, &renderPassInfo, nullptr, &m_RenderPass) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create render pass!");
     }
-    return indices;
+    HT_INFO("Render Pass created (The 'Instructions' for the frame).");
 }
 
-Application::Application() {}
+void Application::createGraphicsPipeline() {
+    // 1. Load your Shaders (We will create these files next!)
+    // For now, we assume they are compiled to 'vert.spv' and 'frag.spv'
+    auto vertShaderCode = Shader::ReadFile("shaders/vert.spv");
+    auto fragShaderCode = Shader::ReadFile("shaders/frag.spv");
 
-Application::~Application() {
-    // Destructor stays empty because cleanup() handles the heavy lifting
-}
+    VkShaderModule vertShaderModule = Shader::CreateShaderModule(m_Device, vertShaderCode);
+    VkShaderModule fragShaderModule = Shader::CreateShaderModule(m_Device, fragShaderCode);
 
-void Application::initWindow() {
-    HT_INFO("Opening Hatchet Window: {0}x{1}", m_Width, m_Height);
-    
-    if (!glfwInit()) {
-        throw std::runtime_error("Could not initialize GLFW!");
+    // Vertex Shader Stage
+    VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
+    vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    vertShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    vertShaderStageInfo.module = vertShaderModule;
+    vertShaderStageInfo.pName = "main"; // The 'main' function inside the shader
+
+    // Fragment Shader Stage
+    VkPipelineShaderStageCreateInfo fragShaderStageInfo{};
+    fragShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    fragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    fragShaderStageInfo.module = fragShaderModule;
+    fragShaderStageInfo.pName = "main";
+
+    VkPipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
+
+    // 2. Vertex Input (Empty for now, we'll add 3D model data later)
+    VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
+    vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+    // 3. Input Assembly (Drawing Triangles)
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    // 4. Viewport & Scissor (Where on the screen we draw)
+    VkViewport viewport{};
+    viewport.x = 0.0f; viewport.y = 0.0f;
+    viewport.width = (float)m_SwapChainExtent.width;
+    viewport.height = (float)m_SwapChainExtent.height;
+    viewport.minDepth = 0.0f; viewport.maxDepth = 1.0f;
+
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = m_SwapChainExtent;
+
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.pViewports = &viewport;
+    viewportState.scissorCount = 1;
+    viewportState.pScissors = &scissor;
+
+    // 5. Rasterizer (The "Paintbrush")
+    VkPipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.lineWidth = 1.0f;
+    rasterizer.cullMode = VK_CULL_MODE_BACK_BIT; // Don't draw the "inside" of walls
+    rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+
+    // 6. Multisampling (Anti-aliasing to fix jagged edges)
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    // 7. Color Blending (How colors mix)
+    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+    colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | 
+                                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    colorBlendAttachment.blendEnable = VK_FALSE;
+
+    VkPipelineColorBlendStateCreateInfo colorBlending{};
+    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments = &colorBlendAttachment;
+
+    // 8. Pipeline Layout (Used for "Uniforms" like camera position)
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_LAYOUT_CREATE_INFO;
+
+    if (vkCreatePipelineLayout(m_Device, &pipelineLayoutInfo, nullptr, &m_PipelineLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create pipeline layout!");
     }
 
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API); // No OpenGL
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);    // Stay stable
+    // 9. FINALLY: Create the Graphics Pipeline
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = shaderStages;
+    pipelineInfo.pVertexInputState = &vertexInputInfo;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.pLayout = m_PipelineLayout;
+    pipelineInfo.renderPass = m_RenderPass;
+    pipelineInfo.subpass = 0;
 
-    m_Window = glfwCreateWindow(m_Width, m_Height, m_WindowTitle.c_str(), nullptr, nullptr);
-    
-    if (!m_Window) {
-        throw std::runtime_error("Window creation failed!");
-    }
-}
-
-void Application::initVulkan() {
-    HT_INFO("Initializing Vulkan Core...");
-
-    // 1. Instance
-    VkApplicationInfo appInfo{};
-    appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    appInfo.pApplicationName = "Hatchet";
-    appInfo.apiVersion = VK_API_VERSION_1_1;
-
-    VkInstanceCreateInfo createInfo{};
-    createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-    createInfo.pApplicationInfo = &appInfo;
-
-    uint32_t glfwExtensionCount = 0;
-    const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
-    createInfo.enabledExtensionCount = glfwExtensionCount;
-    createInfo.ppEnabledExtensionNames = glfwExtensions;
-
-    if (vkCreateInstance(&createInfo, nullptr, &m_Instance) != VK_SUCCESS) {
-        throw std::runtime_error("Vulkan Instance failed!");
-    }
-    HT_INFO("Vulkan Instance created.");
-
-    // 2. Surface
-    if (glfwCreateWindowSurface(m_Instance, m_Window, nullptr, &m_Surface) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to link Vulkan to Window Surface!");
+    if (vkCreateGraphicsPipelines(m_Device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_GraphicsPipeline) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create graphics pipeline!");
     }
 
-    // 3. Physical Device (GPU) Selection
-    uint32_t deviceCount = 0;
-    vkEnumeratePhysicalDevices(m_Instance, &deviceCount, nullptr);
-    if (deviceCount == 0) throw std::runtime_error("No Vulkan GPUs found!");
+    // Clean up temporary shader modules
+    vkDestroyShaderModule(m_Device, fragShaderModule, nullptr);
+    vkDestroyShaderModule(m_Device, vertShaderModule, nullptr);
 
-    std::vector<VkPhysicalDevice> devices(deviceCount);
-    vkEnumeratePhysicalDevices(m_Instance, &deviceCount, devices.data());
-    m_PhysicalDevice = devices[0];
-
-    VkPhysicalDeviceProperties props;
-    vkGetPhysicalDeviceProperties(m_PhysicalDevice, &props);
-    HT_INFO("Hatchet is running on: {0}", props.deviceName);
-
-    // 4. Logical Device
-    QueueFamilyIndices indices = findQueueFamilies(m_PhysicalDevice);
-    std::vector<VkDeviceQueueCreateInfo> queueInfos;
-    uint32_t uniqueFamilies[] = { indices.graphicsFamily.value(), indices.presentFamily.value() };
-    float priority = 1.0f;
-
-    for (uint32_t family : uniqueFamilies) {
-        VkDeviceQueueCreateInfo qInfo{};
-        qInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-        qInfo.queueFamilyIndex = family;
-        qInfo.queueCount = 1;
-        qInfo.pQueuePriorities = &priority;
-        queueInfos.push_back(qInfo);
-    }
-
-    const std::vector<const char*> deviceExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
-
-    VkDeviceCreateInfo dInfo{};
-    dInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-    dInfo.queueCreateInfoCount = static_cast<uint32_t>(queueInfos.size());
-    dInfo.pQueueCreateInfos = queueInfos.data();
-    dInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
-    dInfo.ppEnabledExtensionNames = deviceExtensions.data();
-
-    if (vkCreateDevice(m_PhysicalDevice, &dInfo, nullptr, &m_Device) != VK_SUCCESS) {
-        throw std::runtime_error("Logical Device failed!");
-    }
-
-    vkGetDeviceQueue(m_Device, indices.graphicsFamily.value(), 0, &m_GraphicsQueue);
-    vkGetDeviceQueue(m_Device, indices.presentFamily.value(), 0, &m_PresentQueue);
-    HT_INFO("Logical Device and Queues initialized.");
-}
-
-void Application::createSwapChain() {
-    HT_INFO("Creating Swap Chain...");
-    
-    m_SwapChainImageFormat = VK_FORMAT_B8G8R8A8_SRGB;
-    m_SwapChainExtent = { m_Width, m_Height };
-
-    VkSwapchainCreateInfoKHR createInfo{};
-    createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-    createInfo.surface = m_Surface;
-    createInfo.minImageCount = 3; // Triple Buffering
-    createInfo.imageFormat = m_SwapChainImageFormat;
-    createInfo.imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
-    createInfo.imageExtent = m_SwapChainExtent;
-    createInfo.imageArrayLayers = 1;
-    createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-
-    QueueFamilyIndices indices = findQueueFamilies(m_PhysicalDevice);
-    uint32_t familyIndices[] = {indices.graphicsFamily.value(), indices.presentFamily.value()};
-
-    if (indices.graphicsFamily != indices.presentFamily) {
-        createInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
-        createInfo.queueFamilyIndexCount = 2;
-        createInfo.pQueueFamilyIndices = familyIndices;
-    } else {
-        createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    }
-
-    createInfo.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
-    createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-    createInfo.presentMode = VK_PRESENT_MODE_FIFO_KHR; 
-    createInfo.clipped = VK_TRUE;
-
-    if (vkCreateSwapchainKHR(m_Device, &createInfo, nullptr, &m_SwapChain) != VK_SUCCESS) {
-        throw std::runtime_error("Swap Chain creation failed!");
-    }
-
-    uint32_t imageCount;
-    vkGetSwapchainImagesKHR(m_Device, m_SwapChain, &imageCount, nullptr);
-    m_SwapChainImages.resize(imageCount);
-    vkGetSwapchainImagesKHR(m_Device, m_SwapChain, &imageCount, m_SwapChainImages.data());
-    
-    HT_INFO("Swap Chain ready with {0} images.", imageCount);
-}
-
-void Application::createImageViews() {
-    m_SwapChainImageViews.resize(m_SwapChainImages.size());
-
-    for (size_t i = 0; i < m_SwapChainImages.size(); i++) {
-        VkImageViewCreateInfo createInfo{};
-        createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        createInfo.image = m_SwapChainImages[i];
-        createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        createInfo.format = m_SwapChainImageFormat;
-        createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        createInfo.subresourceRange.levelCount = 1;
-        createInfo.subresourceRange.layerCount = 1;
-
-        if (vkCreateImageView(m_Device, &createInfo, nullptr, &m_SwapChainImageViews[i]) != VK_SUCCESS) {
-            throw std::runtime_error("Image View creation failed!");
-        }
-    }
-    HT_INFO("Image Views (Lenses) created.");
-}
-
-void Application::mainLoop() {
-    HT_TRACE("Entering Main Loop...");
-    while (!glfwWindowShouldClose(m_Window)) {
-        glfwPollEvents();
-    }
+    HT_INFO("Graphics Pipeline 'Frozen' and ready for Hatchet.");
 }
 
 void Application::cleanup() {
     HT_WARN("Cleaning up Hatchet Engine resources...");
 
+    // NEW: Clean up Pipeline objects
+    vkDestroyPipeline(m_Device, m_GraphicsPipeline, nullptr);
+    vkDestroyPipelineLayout(m_Device, m_PipelineLayout, nullptr);
+    vkDestroyRenderPass(m_Device, m_RenderPass, nullptr);
+
     for (auto imageView : m_SwapChainImageViews) {
         vkDestroyImageView(m_Device, imageView, nullptr);
     }
-
-    if (m_SwapChain != VK_NULL_HANDLE) {
-        vkDestroySwapchainKHR(m_Device, m_SwapChain, nullptr);
-    }
-
-    if (m_Device != VK_NULL_HANDLE) {
-        vkDestroyDevice(m_Device, nullptr);
-    }
-
-    if (m_Surface != VK_NULL_HANDLE) {
-        vkDestroySurfaceKHR(m_Instance, m_Surface, nullptr);
-    }
-
-    if (m_Instance != VK_NULL_HANDLE) {
-        vkDestroyInstance(m_Instance, nullptr);
-    }
-
-    if (m_Window) {
-        glfwDestroyWindow(m_Window);
-    }
-    glfwTerminate();
+    // ... (rest of cleanup)
 }
 
 void Application::Run() {
@@ -236,5 +171,7 @@ void Application::Run() {
     initVulkan();
     createSwapChain();
     createImageViews();
+    createRenderPass();      // NEW STEP
+    createGraphicsPipeline(); // NEW STEP
     mainLoop();
 }
